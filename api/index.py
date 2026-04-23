@@ -12,6 +12,8 @@ load_dotenv()
 
 app = FastAPI(title="Palantir Foundry Proxy Backend", version="1.0.0")
 
+from pydantic import BaseModel
+
 # --- Configuration ---
 FOUNDRY_URL = os.getenv("FOUNDRY_URL")
 FOUNDRY_TOKEN = os.getenv("FOUNDRY_TOKEN")
@@ -20,6 +22,7 @@ OBJECT_TYPE = os.getenv("OBJECT_TYPE", "CleanCreditCardTransactions")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@example.com")
 FIREBASE_CREDENTIALS_JSON = os.getenv("FIREBASE_CREDENTIALS_JSON")
 FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH")
+FIREBASE_WEB_API_KEY = os.getenv("FIREBASE_WEB_API_KEY")
 
 # --- Firebase Initialization ---
 if not firebase_admin._apps:
@@ -60,7 +63,36 @@ def get_foundry_token() -> str:
         raise HTTPException(status_code=500, detail="FOUNDRY_TOKEN is not configured in .env")
     return FOUNDRY_TOKEN
 
+# --- Models ---
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
 # --- Routes ---
+
+@app.post("/api/login")
+def login(request: LoginRequest):
+    """
+    Authenticates a user using Firebase REST API and returns an ID token.
+    """
+    if not FIREBASE_WEB_API_KEY:
+        raise HTTPException(status_code=500, detail="FIREBASE_WEB_API_KEY is not configured.")
+        
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_WEB_API_KEY}"
+    payload = {
+        "email": request.email,
+        "password": request.password,
+        "returnSecureToken": True
+    }
+    
+    response = requests.post(url, json=payload)
+    data = response.json()
+    
+    if response.status_code == 200:
+        return data
+    else:
+        error_msg = data.get("error", {}).get("message", "Authentication failed")
+        raise HTTPException(status_code=401, detail=error_msg)
 
 @app.get("/")
 def read_root():
