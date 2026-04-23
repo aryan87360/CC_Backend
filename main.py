@@ -70,6 +70,31 @@ class LoginRequest(BaseModel):
 
 # --- Routes ---
 
+@app.post("/api/signup")
+def signup(request: LoginRequest):
+    """
+    Creates a new user using Firebase REST API and returns an ID token.
+    """
+    if not FIREBASE_WEB_API_KEY:
+        raise HTTPException(status_code=500, detail="FIREBASE_WEB_API_KEY is not configured.")
+        
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={FIREBASE_WEB_API_KEY}"
+    payload = {
+        "email": request.email,
+        "password": request.password,
+        "returnSecureToken": True
+    }
+    
+    response = requests.post(url, json=payload)
+    data = response.json()
+    
+    if response.status_code == 200:
+        data["isAdmin"] = data.get("email") == ADMIN_EMAIL
+        return data
+    else:
+        error_msg = data.get("error", {}).get("message", "Signup failed")
+        raise HTTPException(status_code=400, detail=error_msg)
+
 @app.post("/api/login")
 def login(request: LoginRequest):
     """
