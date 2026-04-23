@@ -34,12 +34,26 @@ def initialize_firebase():
                 return "Initialized from PATH"
             elif FIREBASE_CREDENTIALS_JSON:
                 try:
-                    # Strip quotes and handle potential escaping issues
-                    json_str = FIREBASE_CREDENTIALS_JSON.strip("'\"")
+                    # Strip surrounding single or double quotes added by Vercel dashboard
+                    json_str = FIREBASE_CREDENTIALS_JSON.strip().strip("'\"")
+                    
+                    # If it still contains escaped newlines as literal string "\\n", fix them
+                    # This is a common issue when pasting into Vercel env vars
+                    if "\\n" in json_str and "\n" not in json_str:
+                        # But be careful not to break valid JSON. 
+                        # Only fix it if it's a double-escaped private key issue.
+                        pass # json.loads actually handles \\n fine if it's inside a string
+
                     cred_dict = json.loads(json_str)
+                    
+                    # CRITICAL: Firebase private key MUST have actual newlines.
+                    # If it has literal "\n" characters, replace them with real newlines.
+                    if "private_key" in cred_dict:
+                        cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
+                    
                     cred = credentials.Certificate(cred_dict)
                     firebase_admin.initialize_app(cred)
-                    return "Initialized from JSON"
+                    return "Initialized from JSON (fixed newlines)"
                 except json.JSONDecodeError as e:
                     return f"JSON Decode Error: {str(e)}"
                 except Exception as e:
