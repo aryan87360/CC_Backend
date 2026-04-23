@@ -31,19 +31,28 @@ def initialize_firebase():
             if FIREBASE_CREDENTIALS_PATH and os.path.exists(FIREBASE_CREDENTIALS_PATH):
                 cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
                 firebase_admin.initialize_app(cred)
+                return "Initialized from PATH"
             elif FIREBASE_CREDENTIALS_JSON:
-                # Strip quotes and handle potential escaping issues
-                json_str = FIREBASE_CREDENTIALS_JSON.strip("'\"")
-                cred_dict = json.loads(json_str)
-                cred = credentials.Certificate(cred_dict)
-                firebase_admin.initialize_app(cred)
+                try:
+                    # Strip quotes and handle potential escaping issues
+                    json_str = FIREBASE_CREDENTIALS_JSON.strip("'\"")
+                    cred_dict = json.loads(json_str)
+                    cred = credentials.Certificate(cred_dict)
+                    firebase_admin.initialize_app(cred)
+                    return "Initialized from JSON"
+                except json.JSONDecodeError as e:
+                    return f"JSON Decode Error: {str(e)}"
+                except Exception as e:
+                    return f"JSON Credential Error: {str(e)}"
             else:
-                print("Firebase Error: No credentials found in FIREBASE_CREDENTIALS_PATH or FIREBASE_CREDENTIALS_JSON")
+                return "Missing Credentials: Both FIREBASE_CREDENTIALS_PATH and FIREBASE_CREDENTIALS_JSON are empty or invalid."
         except Exception as e:
-            print(f"Failed to initialize Firebase Admin SDK: {e}")
+            return f"General Initialization Error: {str(e)}"
+    return "Already Initialized"
 
 # Call initialization at module level
-initialize_firebase()
+init_status = initialize_firebase()
+print(f"Firebase Init Status: {init_status}")
 
 security = HTTPBearer()
 
@@ -52,12 +61,12 @@ def get_current_user(creds: HTTPAuthorizationCredentials = Depends(security)) ->
     Validates the Firebase ID token and returns the user object.
     """
     # Ensure initialized (backup for serverless environments)
-    initialize_firebase()
+    status = initialize_firebase()
     
     if not firebase_admin._apps:
         raise HTTPException(
             status_code=500,
-            detail="Backend Error: Firebase Admin SDK not initialized. Please check server logs and environment variables."
+            detail=f"Backend Error: Firebase Admin SDK not initialized. Status: {status}"
         )
 
     token = creds.credentials
