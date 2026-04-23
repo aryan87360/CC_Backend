@@ -25,17 +25,25 @@ FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH")
 FIREBASE_WEB_API_KEY = os.getenv("FIREBASE_WEB_API_KEY")
 
 # --- Firebase Initialization ---
-if not firebase_admin._apps:
-    try:
-        if FIREBASE_CREDENTIALS_PATH and os.path.exists(FIREBASE_CREDENTIALS_PATH):
-            cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
-            firebase_admin.initialize_app(cred)
-        elif FIREBASE_CREDENTIALS_JSON:
-            cred_dict = json.loads(FIREBASE_CREDENTIALS_JSON)
-            cred = credentials.Certificate(cred_dict)
-            firebase_admin.initialize_app(cred)
-    except Exception as e:
-        print(f"Failed to initialize Firebase Admin SDK: {e}")
+def initialize_firebase():
+    if not firebase_admin._apps:
+        try:
+            if FIREBASE_CREDENTIALS_PATH and os.path.exists(FIREBASE_CREDENTIALS_PATH):
+                cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
+                firebase_admin.initialize_app(cred)
+            elif FIREBASE_CREDENTIALS_JSON:
+                # Strip quotes and handle potential escaping issues
+                json_str = FIREBASE_CREDENTIALS_JSON.strip("'\"")
+                cred_dict = json.loads(json_str)
+                cred = credentials.Certificate(cred_dict)
+                firebase_admin.initialize_app(cred)
+            else:
+                print("Firebase Error: No credentials found in FIREBASE_CREDENTIALS_PATH or FIREBASE_CREDENTIALS_JSON")
+        except Exception as e:
+            print(f"Failed to initialize Firebase Admin SDK: {e}")
+
+# Call initialization at module level
+initialize_firebase()
 
 security = HTTPBearer()
 
@@ -43,6 +51,15 @@ def get_current_user(creds: HTTPAuthorizationCredentials = Depends(security)) ->
     """
     Validates the Firebase ID token and returns the user object.
     """
+    # Ensure initialized (backup for serverless environments)
+    initialize_firebase()
+    
+    if not firebase_admin._apps:
+        raise HTTPException(
+            status_code=500,
+            detail="Backend Error: Firebase Admin SDK not initialized. Please check server logs and environment variables."
+        )
+
     token = creds.credentials
     try:
         decoded_token = auth.verify_id_token(token)
