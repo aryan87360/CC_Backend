@@ -89,6 +89,7 @@ def login(request: LoginRequest):
     data = response.json()
     
     if response.status_code == 200:
+        data["isAdmin"] = data.get("email") == ADMIN_EMAIL
         return data
     else:
         error_msg = data.get("error", {}).get("message", "Authentication failed")
