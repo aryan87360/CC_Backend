@@ -1,7 +1,11 @@
 import os
 import requests
-from fastapi import FastAPI, HTTPException
+import json
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
+import firebase_admin
+from firebase_admin import credentials, auth
 
 # Load environment variables from .env file
 load_dotenv()
@@ -13,6 +17,39 @@ FOUNDRY_URL = os.getenv("FOUNDRY_URL")
 FOUNDRY_TOKEN = os.getenv("FOUNDRY_TOKEN")
 ONTOLOGY_RID = os.getenv("ONTOLOGY_RID")
 OBJECT_TYPE = os.getenv("OBJECT_TYPE", "CleanCreditCardTransactions")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@example.com")
+FIREBASE_CREDENTIALS_JSON = os.getenv("FIREBASE_CREDENTIALS_JSON")
+FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH")
+
+# --- Firebase Initialization ---
+if not firebase_admin._apps:
+    try:
+        if FIREBASE_CREDENTIALS_PATH and os.path.exists(FIREBASE_CREDENTIALS_PATH):
+            cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
+            firebase_admin.initialize_app(cred)
+        elif FIREBASE_CREDENTIALS_JSON:
+            cred_dict = json.loads(FIREBASE_CREDENTIALS_JSON)
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+    except Exception as e:
+        print(f"Failed to initialize Firebase Admin SDK: {e}")
+
+security = HTTPBearer()
+
+def get_current_user(creds: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    """
+    Validates the Firebase ID token and returns the user object.
+    """
+    token = creds.credentials
+    try:
+        decoded_token = auth.verify_id_token(token)
+        return decoded_token
+    except Exception as e:
+        raise HTTPException(
+            status_code=401,
+            detail=f"Invalid authentication credentials: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 # --- Token Management ---
 def get_foundry_token() -> str:
@@ -27,12 +64,13 @@ def get_foundry_token() -> str:
 
 @app.get("/")
 def read_root():
-    return {"message": "Palantir Foundry Proxy Backend is running with Token Auth."}
+    return {"message": "Palantir Foundry Proxy Backend is running with Firebase Auth."}
 
 @app.get("/api/transactions")
-def get_transactions(limit: int = 100):
+def get_transactions(limit: int = 100, user: dict = Depends(get_current_user)):
     """
     Fetches records from the CleanCreditCardTransactions object type in Foundry.
+    Requires authentication.
     """
     if not ONTOLOGY_RID:
         raise HTTPException(status_code=500, detail="ONTOLOGY_RID is not configured.")
@@ -60,11 +98,26 @@ def get_transactions(limit: int = 100):
     return response.json()
 
 @app.post("/api/transactions/edit")
-def edit_transaction(payload: dict):
+def edit_transaction(payload: dict, user: dict = Depends(get_current_user)):
     """
     Proxies an action call to Foundry to edit a transaction.
-    Expected payload: { "transactionRid": "...", "description": "...", "amount": ..., "city": "...", "type": "..." }
+    Role-based access:
+    - Admins can edit all fields.
+    - Regular users can only edit the description.
     """
+    user_email = user.get("email")
+    is_admin = user_email == ADMIN_EMAIL
+
+    if not is_admin:
+        # Regular users can only send 'transactionRid' and 'description'
+        allowed_keys = {"transactionRid", "description"}
+        extra_keys = set(payload.keys()) - allowed_keys
+        if extra_keys:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden: Regular users can only edit the description. Invalid fields: {', '.join(extra_keys)}"
+            )
+
     if not ONTOLOGY_RID:
         raise HTTPException(status_code=500, detail="ONTOLOGY_RID is not configured.")
 
