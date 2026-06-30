@@ -1,7 +1,10 @@
 import os
+import uuid
 import requests
 import json
-from fastapi import FastAPI, HTTPException, Depends
+from collections import deque
+from datetime import datetime, timezone
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 import firebase_admin
@@ -23,6 +26,24 @@ ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@example.com")
 FIREBASE_CREDENTIALS_JSON = os.getenv("FIREBASE_CREDENTIALS_JSON")
 FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH")
 FIREBASE_WEB_API_KEY = os.getenv("FIREBASE_WEB_API_KEY")
+FOUNDRY_WEBHOOK_SECRET = os.getenv("FOUNDRY_WEBHOOK_SECRET", "")  # Optional shared secret for webhook validation
+
+# --- In-Memory Notification Store ---
+# Rolling window of the last 50 events sent by Foundry via webhook.
+# Resets on server restart (acceptable for testing).
+MAX_NOTIFICATIONS = 50
+notifications: deque = deque(maxlen=MAX_NOTIFICATIONS)
+
+
+def _build_notification_message(payload: dict) -> str:
+    """Build a human-readable message from the Foundry webhook payload."""
+    action = payload.get("action") or payload.get("actionType") or "unknown action"
+    obj_rid = payload.get("objectRid") or payload.get("primaryKey") or "unknown object"
+    modified = payload.get("modifiedProperties") or payload.get("changedFields") or []
+    if isinstance(modified, list) and modified:
+        fields = ", ".join(str(f) for f in modified)
+        return f"Foundry: '{action}' — fields changed: {fields} (object: {obj_rid})"
+    return f"Foundry: '{action}' applied on object {obj_rid}"
 
 # --- Firebase Initialization ---
 def initialize_firebase():
@@ -205,6 +226,8 @@ def edit_transaction(payload: dict, user: dict = Depends(get_current_user)):
     """
     user_email = user.get("email")
     is_admin = user_email == ADMIN_EMAIL
+    
+    print(f"RBAC Check: User={user_email}, IsAdmin={is_admin}")
 
     if not is_admin:
         # Regular users can only send 'transactionRid' and 'description'
@@ -249,6 +272,63 @@ def edit_transaction(payload: dict, user: dict = Depends(get_current_user)):
         )
         
     return {"status": "success"}
+
+
+# ---------------------------------------------------------------------------
+# Foundry → Backend communication
+# ---------------------------------------------------------------------------
+
+@app.post("/api/foundry-webhook")
+async def foundry_webhook(request: Request):
+    """
+    Webhook receiver called by Foundry when an ontology object changes.
+    Foundry must be configured to POST to this URL.
+
+    Optional: set FOUNDRY_WEBHOOK_SECRET in .env and add the same value
+    as a custom header (X-Foundry-Secret) in the Foundry webhook config
+    for basic validation.
+    """
+    # --- Optional shared-secret validation ---
+    if FOUNDRY_WEBHOOK_SECRET:
+        incoming_secret = request.headers.get("X-Foundry-Secret", "")
+        if incoming_secret != FOUNDRY_WEBHOOK_SECRET:
+            raise HTTPException(status_code=403, detail="Invalid webhook secret")
+
+    # Parse body (Foundry may send JSON or an empty body on some events)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    entry = {
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "source": "foundry",
+        "message": _build_notification_message(payload),
+        "raw": payload,
+    }
+    notifications.appendleft(entry)
+    print(f"📡 Foundry webhook received: {entry['message']}")
+    return {"status": "received", "notificationId": entry["id"]}
+
+
+@app.get("/api/notifications")
+def get_notifications():
+    """
+    Returns the list of recent Foundry-sourced notifications.
+    No authentication required (testing purposes — visible to all).
+    iOS app polls this endpoint every 15 seconds.
+    """
+    return {"notifications": list(notifications)}
+
+
+@app.delete("/api/notifications")
+def clear_notifications():
+    """
+    Clears all stored notifications. Useful for testing.
+    """
+    notifications.clear()
+    return {"status": "cleared", "count": 0}
 
 if __name__ == "__main__":
     import uvicorn
