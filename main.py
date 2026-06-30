@@ -252,6 +252,19 @@ def edit_transaction(payload: dict, user: dict = Depends(get_current_user)):
         "Content-Type": "application/json"
     }
     
+    # Compute which properties are being modified (for webhook side-effect)
+    modified_properties = []
+    if payload.get("description") is not None:
+        modified_properties.append("description")
+    if payload.get("amount") is not None:
+        modified_properties.append("amount")
+    if payload.get("city") is not None:
+        modified_properties.append("city")
+    if payload.get("type") is not None:
+        modified_properties.append("type")
+    if not modified_properties:
+        modified_properties = ["description"]  # fallback so Required constraint is satisfied
+
     # Transform payload for Foundry
     foundry_payload = {
         "parameters": {
@@ -259,7 +272,11 @@ def edit_transaction(payload: dict, user: dict = Depends(get_current_user)):
             "description": payload.get("description"),
             "amount": payload.get("amount"),
             "city": payload.get("city"),
-            "type": payload.get("type")
+            "type": payload.get("type"),
+            # Webhook-required parameters
+            "actionName": "edit-clean-credit-card-transactions",
+            "objectRid": payload.get("transactionRid"),
+            "modifiedProperties": modified_properties,
         }
     }
     
